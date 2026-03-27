@@ -26,18 +26,32 @@ export function ChatPage() {
     try {
       setError(null);
       setIsConnecting(true);
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error("GEMINI_API_KEY is not defined in the environment.");
+      }
+      
+      const ai = new GoogleGenAI({ apiKey });
       playerRef.current = new AudioPlayer();
 
+      console.log("Connecting to Live API with key length:", apiKey.length);
       const sessionPromise = ai.live.connect({
         model: "gemini-3.1-flash-live-preview",
         callbacks: {
           onopen: () => {
+            console.log("Live API onopen called");
             setIsConnected(true);
             setIsConnecting(false);
             setMessages([{ role: 'model', text: 'Hello. I am here with you. Take your time.' }]);
+            
+            // Send an initial message to trigger a response
+            sessionPromise.then(session => {
+              session.sendRealtimeInput({ text: "Hello, I am ready to begin." });
+            }).catch(console.error);
           },
           onmessage: async (message: LiveServerMessage) => {
+            console.log("Live API onmessage received", message);
             // Handle audio output
             const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
             if (base64Audio && playerRef.current) {
@@ -76,7 +90,11 @@ export function ChatPage() {
               });
             }
           },
-          onclose: () => {
+          onclose: (event: any) => {
+            console.log("Live API onclose called. Event:", event);
+            if (event && event.code !== 1000 && event.code !== 1005) {
+              setError(`Connection closed (Code: ${event.code}). Reason: ${event.reason || 'Unknown'}`);
+            }
             setIsConnected(false);
             stopRecording();
           },
@@ -93,10 +111,17 @@ export function ChatPage() {
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: "Zephyr" } },
           },
-          systemInstruction: "You are Cognito, a premium mental wellness companion. You are not a traditional AI, chatbot, or clinical therapist. You are a calm, emotionally intelligent, and non-judgmental 'presence.' Your primary goal is to make the user feel heard, understood, and safe. Speak for Voice: Your output will be spoken aloud by a text-to-speech engine. NEVER use formatting like bullet points, bold text, asterisks, emojis, or long, dense paragraphs. Be Concise and Paced: Keep your responses relatively short to allow for a fluid, real-time back-and-forth conversation. Use natural pauses and phrasing. Show Emotional Intelligence: Listen actively. Validate the user's feelings before offering any perspective. Use gentle affirmations like 'I hear you,' 'That makes a lot of sense,' 'It is completely okay to feel that way,' or 'Take your time.' Be a Presence, Not a Fixer: Do not rush to solve the user's problems or give unsolicited advice. Your value lies in holding space and offering a calm perspective. Ask gentle, open-ended questions that encourage the user to explore their thoughts. Tone and Vibe: Your tone is warm, grounded, minimal, and organic. You speak like a deeply empathetic, articulate friend sitting quietly in a serene room with the user.",
+          systemInstruction: "You are Cognito, a premium mental wellness companion. You are a calm, emotionally intelligent, and non-judgmental presence. Your primary goal is to make the user feel heard, understood, and safe. Speak for Voice: Your output will be spoken aloud. Be Concise and Paced: Keep your responses relatively short to allow for a fluid conversation. Show Emotional Intelligence: Listen actively and validate feelings. Tone and Vibe: Your tone is warm, grounded, minimal, and organic.",
           outputAudioTranscription: {},
           inputAudioTranscription: {},
         },
+      });
+
+      sessionPromise.catch((err: any) => {
+        console.error("Live API Connection Promise Rejected:", err);
+        setError("Failed to connect: " + (err.message || String(err)));
+        setIsConnecting(false);
+        setIsConnected(false);
       });
 
       sessionRef.current = sessionPromise;
@@ -109,7 +134,11 @@ export function ChatPage() {
 
   const disconnect = () => {
     if (sessionRef.current) {
-      sessionRef.current.then((session: any) => session.close());
+      sessionRef.current.then((session: any) => {
+        if (session && session.conn) {
+          session.conn.close();
+        }
+      }).catch(console.error);
       sessionRef.current = null;
     }
     setIsConnected(false);
